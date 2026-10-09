@@ -1,8 +1,11 @@
-// Smooth Extrapolation - extrapolacion visual de cuadros para Geometry Dash (Geode)
+// Smooth Extrapolation v1.0.1 - extrapolacion visual de cuadros para Geometry Dash (Geode)
 //
 // Solo mueve la posicion VISUAL (nodo de cocos) del jugador y de la capa de objetos
 // despues de que el juego termina su paso de fisica, y la restaura antes del siguiente.
 // No modifica m_position, velocidades, hitboxes ni entradas.
+//
+// v1.0.1: si una animacion del juego (giro del cubo, animacion de fin de nivel) mueve
+// o gira al jugador, el mod ya no la pisa: la respeta y no extrapola ese cuadro.
 
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
@@ -30,10 +33,12 @@ struct Track {
     Vec real;        // posicion real (la del juego) tras el ultimo update
     Vec vel;         // desplazamiento medido por tick
     Vec corr;        // correccion suavizada tras un fallo de prediccion
-    Vec lastVisual;  // ultima posicion dibujada
+    Vec lastVisual;  // ultima posicion dibujada por el mod
     float realRot = 0.f;
     float rotVel = 0.f;
+    float setRot = 0.f; // ultima rotacion puesta por el mod
     bool applied = false;
+    bool rotApplied = false;
     bool valid = false;
     bool hasVisual = false;
 };
@@ -63,21 +68,30 @@ constexpr float kTeleport = 40.f;  // unidades por tick: por encima es teletrans
 constexpr float kMaxCorr = 3.f;    // limite de la correccion suavizada (unidades)
 constexpr float kCorrDecay = 45.f; // velocidad a la que desaparece la correccion (1/s)
 constexpr float kMaxRotVel = 30.f; // grados por tick
+constexpr float kEps = 0.01f;
 
-void restorePlayer(PlayerObject* p, Track& t) {
-    if (!p || !t.applied) return;
-    p->CCSprite::setPosition(t.real.pt());
-    if (s.rotation) p->CCSprite::setRotation(t.realRot);
-    t.applied = false;
+// Devuelve el nodo a su valor real, salvo que el juego lo haya cambiado por su cuenta
+// (una accion/animacion). En ese caso no se toca y devuelve true.
+bool restorePlayer(PlayerObject* p, Track& t) {
+    if (!p) return false;
+    bool external = false;
+    if (t.applied) {
+        t.applied = false;
+        if ((Vec(p->getPosition()) - t.lastVisual).len() > kEps) external = true;
+        else p->CCSprite::setPosition(t.real.pt());
+    }
+    if (t.rotApplied) {
+        t.rotApplied = false;
+        if (std::fabs(p->getRotation() - t.setRot) < kEps) p->CCSprite::setRotation(t.realRot);
+    }
+    return external;
 }
 
-void restoreAll(GJBaseGameLayer* gl) {
-    restorePlayer(gl->m_player1, s.p1);
-    restorePlayer(gl->m_player2, s.p2);
-    if (s.cam.applied && gl->m_objectLayer) {
+void restoreCam(GJBaseGameLayer* gl) {
+    if (!s.cam.applied || !gl->m_objectLayer) return;
+    s.cam.applied = false;
+    if ((Vec(gl->m_objectLayer->getPosition()) - s.cam.lastVisual).len() <= kEps)
         gl->m_objectLayer->setPosition(s.cam.real.pt());
-        s.cam.applied = false;
-    }
 }
 
 // Actualiza la velocidad medida. Devuelve true si hubo un cambio brusco.
@@ -99,15 +113,18 @@ bool measure(Track& t, Vec before, Vec after, int n) {
     return abrupt;
 }
 
-void applyPlayer(PlayerObject* p, Track& t, Vec before, float rotBefore, int n, float alpha, float frameTicks, float dt) {
+void applyPlayer(PlayerObject* p, Track& t, Vec before, float rotBefore, int n, float alpha, float frameTicks, float dt, bool external) {
     if (!p) return;
+    Vec oldVel = t.vel;
     bool abrupt = measure(t, before, Vec(p->getPosition()), n);
     t.realRot = p->getRotation();
     if (n > 0) {
         float rv = (t.realRot - rotBefore) / n;
         t.rotVel = std::fabs(rv) > kMaxRotVel ? 0.f : rv;
     }
-    if (p->m_isDead || !t.valid) {
+    // Muerto, o una animacion del juego esta moviendo al jugador: no tocar nada
+    if (external || p->m_isDead || !t.valid) {
+        if (external) { t.vel = {}; t.rotVel = 0.f; }
         t.corr = {};
         t.hasVisual = false;
         return;
@@ -125,8 +142,8 @@ void applyPlayer(PlayerObject* p, Track& t, Vec before, float rotBefore, int n, 
 
     if (s.smooth) {
         if (abrupt && t.hasVisual) {
-            // Diferencia entre donde "deberia" seguir el dibujo y la nueva prediccion
-            Vec c = (t.lastVisual + t.vel * frameTicks) - target;
+            // Diferencia entre donde iba a seguir el dibujo y la nueva prediccion
+            Vec c = (t.lastVisual + oldVel * frameTicks) - target;
             float l = c.len();
             if (l > kMaxCorr) c = c * (kMaxCorr / l);
             t.corr = c;
@@ -137,10 +154,17 @@ void applyPlayer(PlayerObject* p, Track& t, Vec before, float rotBefore, int n, 
     }
 
     p->CCSprite::setPosition(target.pt());
-    if (s.rotation) p->CCSprite::setRotation(t.realRot + t.rotVel * alpha);
     t.lastVisual = target;
     t.hasVisual = true;
     t.applied = true;
+
+    // Solo se extrapola el giro que calcula la fisica (nave, wave...). El giro del cubo
+    // lo hace una animacion del juego que ya es suave por cuadro, y no se toca.
+    if (s.rotation && t.rotVel != 0.f) {
+        t.setRot = t.realRot + t.rotVel * alpha;
+        p->CCSprite::setRotation(t.setRot);
+        t.rotApplied = true;
+    }
 
     // Que la punta del trail de wave siga al icono dibujado
     if (s.wave && p->m_isDart && p->m_waveTrail) {
@@ -159,7 +183,9 @@ class $modify(SEPlayLayer, PlayLayer) {
     }
 
     void resetLevel() {
-        restoreAll(this);
+        restorePlayer(m_player1, s.p1);
+        restorePlayer(m_player2, s.p2);
+        restoreCam(this);
         s.reset();
         PlayLayer::resetLevel();
     }
@@ -174,7 +200,9 @@ class $modify(SEBaseLayer, GJBaseGameLayer) {
         }
 
         // 1. Devolver todo a su posicion real antes de que el juego calcule nada
-        restoreAll(this);
+        bool ext1 = restorePlayer(m_player1, s.p1);
+        bool ext2 = restorePlayer(m_player2, s.p2);
+        restoreCam(this);
 
         bool dual = m_gameState.m_isDualMode && m_player2;
         Vec b1 = m_player1->getPosition();
@@ -212,14 +240,15 @@ class $modify(SEBaseLayer, GJBaseGameLayer) {
         }
 
         // 4. Aplicar el desplazamiento visual
-        applyPlayer(m_player1, s.p1, b1, r1, n, alpha, frameTicks, dt);
-        if (dual) applyPlayer(m_player2, s.p2, b2, r2, n, alpha, frameTicks, dt);
+        applyPlayer(m_player1, s.p1, b1, r1, n, alpha, frameTicks, dt, ext1);
+        if (dual) applyPlayer(m_player2, s.p2, b2, r2, n, alpha, frameTicks, dt, ext2);
         else s.p2 = {};
 
         if (s.camera) {
             measure(s.cam, bc, Vec(m_objectLayer->getPosition()), n);
             if (s.cam.valid) {
-                m_objectLayer->setPosition((s.cam.real + s.cam.vel * alpha).pt());
+                s.cam.lastVisual = s.cam.real + s.cam.vel * alpha;
+                m_objectLayer->setPosition(s.cam.lastVisual.pt());
                 s.cam.applied = true;
             }
         }
