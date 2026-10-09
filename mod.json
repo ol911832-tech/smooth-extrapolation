@@ -1,7 +1,7 @@
 {
     "geode": "4.10.0",
     "gd": {
-        "win": "2.2074"
+        "win": "2.2081"
     },
     "id": "user.smooth-extrapolation",
     "name": "Smooth Extrapolation",
