@@ -1,0 +1,43 @@
+{
+    "geode": "4.10.0",
+    "gd": {
+        "win": "2.2074"
+    },
+    "id": "user.smooth-extrapolation",
+    "name": "Smooth Extrapolation",
+    "version": "v1.0.0",
+    "developer": "user",
+    "description": "Extrapolacion visual de cuadros mejorada. No toca las fisicas.",
+    "settings": {
+        "enabled": {
+            "type": "bool",
+            "name": "Activar",
+            "description": "Activa la extrapolacion visual. Se aplica al entrar al nivel.",
+            "default": true
+        },
+        "camera": {
+            "type": "bool",
+            "name": "Extrapolar camara",
+            "description": "Mueve tambien el nivel, para que el icono no vibre respecto a los bloques.",
+            "default": true
+        },
+        "rotation": {
+            "type": "bool",
+            "name": "Extrapolar rotacion",
+            "description": "Suaviza el giro del cubo y la bola.",
+            "default": true
+        },
+        "smooth-correction": {
+            "type": "bool",
+            "name": "Suavizar correcciones",
+            "description": "Reparte en varios cuadros el salto que aparece al tocar orbes, portales o al hacer clic.",
+            "default": true
+        },
+        "wave-trail": {
+            "type": "bool",
+            "name": "Ajustar trail de wave",
+            "description": "Hace que la punta del trail siga al icono dibujado.",
+            "default": true
+        }
+    }
+}
